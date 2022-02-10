@@ -86,7 +86,7 @@ def build_tb_parser_model(
     if use_upper:
         with use_ops("cpu"):
             # Initialize weights at zero, as it's a classification layer.
-            upper = _define_upper(nO=nO, nI=None)
+            upper = _define_upper(nO=nO, nI=tok2vec.get_dim("nO")*2)
     return TransitionModel(tok2vec, lower, upper, resize_output)
 
 

@@ -46,5 +46,5 @@ def init(model, X=None, Y=None):
     lower = model.get_ref("lower")
     lower.initialize()
     if model.attrs["has_upper"]:
-        statevecs = model.ops.alloc2f(2, lower.get_dim("nO"))
+        statevecs = model.ops.alloc2f(2, lower.get_dim("nO")*2)
         model.get_ref("upper").initialize(X=statevecs)

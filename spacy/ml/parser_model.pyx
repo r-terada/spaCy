@@ -42,7 +42,7 @@ cdef SizesC get_c_sizes(model, int batch_size) except *:
         output.classes = model.state2vec.get_dim("nO")
     else:
         output.classes = model.vec2scores.get_dim("nO")
-    output.hiddens = model.state2vec.get_dim("nO")
+    output.hiddens = model.state2vec.get_dim("nO") * 2
     output.pieces = model.state2vec.get_dim("nP")
     output.feats = model.state2vec.get_dim("nF")
     output.embed_width = model.tokvecs.shape[1]
@@ -98,8 +98,8 @@ cdef void predict_states(ActivationsC* A, StateC** states,
         states[i].set_context_tokens(&A.token_ids[i*n.feats], n.feats)
     memset(A.unmaxed, 0, n.states * n.hiddens * n.pieces * sizeof(float))
     memset(A.hiddens, 0, n.states * n.hiddens * sizeof(float))
-    sum_state_features(A.unmaxed,
-        W.feat_weights, A.token_ids, n.states, n.feats, n.hiddens * n.pieces)
+    concat_state_features(A.unmaxed,
+        W.feat_weights, A.token_ids, n.states, n.feats, n.hiddens * n.pieces / 2)
     for i in range(n.states):
         VecVec.add_i(&A.unmaxed[i*n.hiddens*n.pieces],
             W.feat_bias, 1., n.hiddens * n.pieces)
@@ -152,6 +152,39 @@ cdef void sum_state_features(float* output,
             blis.cy.axpyv(blis.cy.NO_CONJUGATE, O, one,
                 <float*>feature, 1,
                 &output[b*O], 1)
+        token_ids += F
+
+
+cdef void concat_state_features(float* output,
+        const float* cached, const int* token_ids, int B, int F, int O) nogil:
+
+    cdef int idx, b, f, i
+    cdef const float* feature
+    padding = cached
+    cached += F * O
+    cdef int id_stride = F*O
+    cdef float one = 1.
+    for b in range(B):
+        for f in range(F):
+            if token_ids[f] < 0:
+                feature = &padding[f*O]
+            else:
+                idx = token_ids[f] * id_stride + f*O
+                feature = &cached[idx]
+
+            if f < 3:
+                feature_from_buffer = True
+            else:
+                feature_from_buffer = False
+
+            if feature_from_buffer:
+                blis.cy.axpyv(blis.cy.NO_CONJUGATE, O, one,
+                    <float*>feature, 1,
+                    &output[b*O*2], 1)
+            else:
+                blis.cy.axpyv(blis.cy.NO_CONJUGATE, O, one,
+                    <float*>feature, 1,
+                    &output[b*O*2+O], 1)
         token_ids += F
 
 
@@ -281,7 +314,6 @@ class ParserStepModel(Model):
         else:
             self.backprops.append((token_ids, d_vector, get_d_tokvecs))
 
-
     def finish_steps(self, golds):
         # Add a padding vector to the d_tokvecs gradient, so that missing
         # values don't affect the real gradient.
@@ -372,6 +404,7 @@ cdef class precompute_hiddens:
             self.bias = lower_model.get_param("b").get(stream=cuda_stream)
         else:
             self.bias = lower_model.get_param("b")
+        self.bias = numpy.concatenate([self.bias, self.bias], axis=0)
         self.nF = cached.shape[1]
         if lower_model.has_dim("nP"):
             self.nP = lower_model.get_dim("nP")
@@ -434,7 +467,7 @@ cdef class precompute_hiddens:
 
     def begin_update(self, token_ids):
         cdef np.ndarray state_vector = numpy.zeros(
-            (token_ids.shape[0], self.nO, self.nP), dtype='f')
+            (token_ids.shape[0], self.nO*2, self.nP), dtype='f')
         # This is tricky, but (assuming GPU available);
         # - Input to forward on CPU
         # - Output from forward on CPU
@@ -444,7 +477,7 @@ cdef class precompute_hiddens:
 
         feat_weights = self.get_feat_weights()
         cdef int[:, ::1] ids = token_ids
-        sum_state_features(<float*>state_vector.data,
+        concat_state_features(<float*>state_vector.data,
             feat_weights, &ids[0,0],
             token_ids.shape[0], self.nF, self.nO*self.nP)
         state_vector += self.bias

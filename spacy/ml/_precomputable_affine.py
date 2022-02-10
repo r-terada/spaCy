@@ -41,6 +41,9 @@ def forward(model, X, is_train):
         # However, we avoid building that array for efficiency -- and just pass
         # in the indices.
         dY, ids = dY_ids
+        dY = dY.reshape(dY.shape[0], nO, 2, nP)
+        import numpy as np
+        dY = np.sum(dY, axis=2)
         assert dY.ndim == 3
         assert dY.shape[1] == nO, dY.shape
         assert dY.shape[2] == nP, dY.shape
